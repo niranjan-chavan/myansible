@@ -1,0 +1,50 @@
+####IP address of Tvault appliance###
+IP_ADDRESS: 192.168.11.165
+TVAULT_CONTEGO_EXT_USER: nova
+TVAULT_CONTEGO_EXT_GROUP: nova
+
+#Uncomment following node which you want to configure##
+controller: True
+#compute: True
+
+#Nova compute.filters file path
+#Uncomment following line as per the OS distribution, you can edit the path as per your nova configuration
+
+###For RHEL systems
+NOVA_COMPUTE_FILTERS_FILE: /etc/nova/rootwrap.d/compute.filters
+
+###For Debian systems
+#NOVA_COMPUTE_FILTERS_FILE: /etc/nova/rootwrap.d/compute.filters
+
+##For any other system
+##NOVA_COMPUTE_FILTERS_FILE:
+
+##### Select snapshot storage type #####
+#Uncomment following lines and edit for NFS as snapshot storage
+NFS: False
+NFS_SHARES: 192.168.1.33:/mnt/tvault
+
+#### Details for S3 as snapshot storage
+S3: True
+VAULT_S3_ACCESS_KEY: AKIAJRZSA6PLWFXXFUVA
+VAULT_S3_SECRET_ACCESS_KEY: 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
+VAULT_S3_REGION_NAME: us-east-2
+VAULT_S3_BUCKET: sanityautomation
+#### S3 Specific Backend Configurations
+#### Uncomment one of the following for the specific S3 type
+Amazon: True
+other_S3_compatible_storage: False
+
+#### Required field(s) for all S3 backends except Amazon
+VAULT_S3_ENDPOINT_URL:
+VAULT_S3_SECURE: False
+VAULT_S3_SIGNATURE_VERSION: default
+
+#Datamover URL
+datamover_url: http://172.26.0.32:8784 
+ssl_cert_file: ""
+ssl_key_file: ""
+dmapi_enabled_ssl_apis: ""
+
+#### Openstack python version
+openstack_python_version: python2
