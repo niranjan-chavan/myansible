@@ -2,7 +2,7 @@
 metos=`echo $1`
 metos2=`echo $2`
 ####################
-TVAULT_V=4.0.74.tar.gz
+TVAULT_V=4.0.78.tar.gz
 TVAULT_VERSION=$(echo $TVAULT_V | awk -F '.tar' '{ print $1 }')
 PYPI_PORT=8081
 HTTP_PORT=8085

@@ -1483,7 +1483,7 @@ TVAULT_CONTEGO_EXT_GROUP=nova
 VAULT_DATA_DIR=/var/triliovault-mounts
 VAULT_DATA_DIR_OLD=/var/triliovault
 #Value of TVAULT_CONTEGO_VERSION will be replaced with latest build version during build creation.
-TVAULT_CONTEGO_VERSION=4.0.74
+TVAULT_CONTEGO_VERSION=4.0.78
 declare TVAULT_CONTEGO_VIRTENV
 TVAULT_CONTEGO_VIRTENV=/home/tvault
 TVAULT_CONTEGO_VIRTENV_PATH="$TVAULT_CONTEGO_VIRTENV/.virtenv"
@@ -2607,7 +2607,6 @@ if [[ "$TVAULT_CONTEGO_EXT" == "True" ]]; then
       ln -s /usr/lib /usr/lib64
    fi
    mkdir -p "$TVAULT_CONTEGO_VIRTENV"
-   check_virtual_environment
    GetDistro
    echo "python 2 version " $python2_version
    if [[ "$DISTRO" == "rhel7" ]]; then
@@ -2672,6 +2671,7 @@ if [[ "$TVAULT_CONTEGO_EXT" == "True" ]]; then
    fi
    echo "contego version installed" $CONTEGO_VERSION_INSTALLED
    echo "tvault contego verison" $TVAULT_CONTEGO_VERSION
+   check_virtual_environment
    rm -rf tvault-contego-virtenv.tar.gz
    if [ "$TVAULT_CONTEGO_VERSION" != "$CONTEGO_VERSION_INSTALLED" ]; then
         echo -e "Problem encountered installing correct version of script\nretry by uninstalling script\n"

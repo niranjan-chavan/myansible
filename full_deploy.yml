@@ -1,0 +1,492 @@
+---
+- hosts: 127.0.0.1
+  connection: local
+
+  tasks:
+  - name: Clean existing tvault-contego install file
+    file: 
+      path: "{{playbook_dir}}/tvault-contego-install.sh"
+      state: absent
+
+  - name: Download tvault-contego install file
+    get_url: 
+      url: "http://{{tvault_ip}}/tvault-contego-install.sh"
+      dest: "{{playbook_dir}}/"
+      mode: 0700
+      validate_certs: no
+
+  - name: Create property file
+    copy: 
+      src: "{{playbook_dir}}/vars/tvault-contego-answers.yml"
+      dest: "{{playbook_dir}}/tvault-contego-install.answers"
+      mode: 0750
+
+  - name: Format answers file
+    replace: 
+      dest: "{{playbook_dir}}/tvault-contego-install.answers"
+      regexp: '\:\s'
+      replace: '='
+
+  - name: Clean existing tvault-horizon-plugin install file
+    file: 
+      path: "{{playbook_dir}}/tvault-horizon-plugin-install.sh"
+      state: absent
+
+  - name: Download tvault-horizon-plugin install file
+    get_url: 
+      url: "http://{{tvault_ip}}/tvault-horizon-plugin-install.sh"
+      dest: "{{playbook_dir}}/"
+      mode: 0700
+      validate_certs: no
+
+  - name: Create property file
+    copy: 
+      src: "{{playbook_dir}}/vars/tvault-horizon-plugin-answers.yml"
+      dest: "{{playbook_dir}}/tvault-horizon-plugin-install.answer"
+      mode: 0750
+
+  - name: Format answers file
+    replace: 
+      dest: "{{playbook_dir}}/tvault-horizon-plugin-install.answer"
+      regexp: '\:\s'
+      replace: '='
+
+- hosts: controller
+
+  vars:
+    test_results_file: test_results_{{ setup_name }}
+    dmapi_container_name: "{{ inventory_hostname }}_dmapi"
+
+  tasks:
+  - set_fact: os_release_version=17
+    when: os_release == "queens"
+  - set_fact: os_release_version=18
+    when: os_release == "rocky"
+  - set_fact: os_release_version=19
+    when: os_release == "stein"
+  - set_fact: os_release_version=20
+    when: os_release == "train"
+  - debug: var=os_release_version
+
+  - name: Fetch distribution
+    shell: awk '/ID=/' /etc/os-release | sed 's/ID=//' | sed -r 's/\"|\(|\)//g' | awk '{print $1;exit}'
+    register: result
+
+  - name: Get distro name
+    set_fact: distro={{ result.stdout }}
+    when: result.stdout=="centos"
+
+  - name: Get distro name
+    set_fact: distro=ubuntu
+    when: result.stdout!="centos"
+  - debug: var=distro
+
+  - name: remove datamover api container if already existing
+    lxc_container:
+      name: "{{ dmapi_container_name }}"
+      state: absent
+
+  - name: create datamover api container on controller node
+    lxc_container:
+      name: "{{ dmapi_container_name }}"
+      state: started
+      template: "{{ distro }}"
+      container_command: |
+        mkdir /etc/nova
+        useradd nova
+  
+  - name: Find nova container
+    shell: lxc-ls -1 | grep -i nova
+    register: result_nova
+
+
+  - name: Find python version of nova service
+    shell: lxc-attach -n {{ result_nova.stdout }} -- bash -c "ps -ef | grep python2 | grep -v grep > /dev/null && echo 'python' || echo 'python3'"
+    register: python_result
+
+
+  - name: install packages on datamover api container | centos-release-openstack-{{ os_release }}
+    shell: lxc-attach -n {{ dmapi_container_name }} -- bash -c "yum install centos-release-openstack-{{ os_release }} -y"
+    when: distro=="centos"
+    retries: 3
+    delay: 3
+    register: result
+    until: result.rc == 0
+
+  - name: install packages on datamover api container | {{ python_result.stdout }} devel and nova packages
+    shell: lxc-attach -n {{ dmapi_container_name }} -- bash -c "yum install {{ python_result.stdout }}-devel {{ python_result.stdout }}-nova -y"
+    when: distro=="centos"
+    retries: 3
+    delay: 3
+    register: result
+    until: result.rc == 0
+
+  - name: install packages on datamover api container | software-properties-common
+    shell: lxc-attach -n {{ dmapi_container_name }} -- bash -c "apt-get update && apt-get install software-properties-common -y"
+    when: distro=="ubuntu"
+    retries: 3
+    delay: 3
+    register: result
+    until: result.rc == 0
+
+  - name: install packages on datamover api container | Add repo cloud-archive:{{ os_release }}
+    shell: lxc-attach -n {{ dmapi_container_name }} -- bash -c "add-apt-repository cloud-archive:{{ os_release }} -y"
+    when: distro=="ubuntu"
+    retries: 3
+    delay: 3
+    register: result
+    until: result.rc == 0
+
+  - name: install packages on datamover api container | python-dev
+    shell: lxc-attach -n {{ dmapi_container_name }} -- bash -c "apt-get install {{ python_result.stdout }}-dev {{ python_result.stdout }}-nova curl -y"
+    when: distro=="ubuntu"
+    retries: 3
+    delay: 3
+    register: result
+    until: result.rc == 0
+
+
+  - name: Copy nova.conf to datamover api container
+    copy:
+      src: /var/lib/lxc/{{ result_nova.stdout }}/rootfs/etc/nova/nova.conf
+      dest: /var/lib/lxc/{{ dmapi_container_name }}/rootfs/etc/nova/
+      owner: root
+      mode: 0640
+      remote_src: yes
+
+  - name: Fetch network hardware address of datamover api container
+    shell: cat /var/lib/lxc/{{ dmapi_container_name }}/config | grep "^lxc.network.hwaddr" | cut -d '=' -f2
+    register: mac
+    when: distro=="centos"
+
+  - name: Add network details | network type
+    shell: echo "lxc.network.type = veth" >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="centos"
+
+  - name: Add network details | network hardware address
+    shell: echo "lxc.network.hwaddr = " {{ mac.stdout }} >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="centos"
+
+  - name: Add network details | network name
+    shell: echo "lxc.network.name = eth_mgmt" >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="centos"
+
+  - name: Add network details | network link
+    shell: echo "lxc.network.link = br-mgmt" >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="centos"
+
+  - name: Add network details | flags
+    shell: echo "lxc.network.flags = up" >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="centos"
+
+  - name: Add network details | mtu
+    shell: echo "lxc.network.mtu = 1500" >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="centos"
+
+  - name: Add network details | IP
+    shell: echo "lxc.network.ipv4 = 172.26.0.108/22" >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="centos"
+
+  - name: Fetch network hardware address of datamover api container
+    shell: cat /var/lib/lxc/{{ dmapi_container_name }}/config | grep "^lxc.net.0.hwaddr" | cut -d '=' -f2
+    register: mac
+    when: distro=="ubuntu"
+
+  - name: Add network details | network type
+    shell: echo "lxc.net.1.type = veth" >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="ubuntu"
+
+  - name: Add network details | network hardware address
+    shell: echo "lxc.net.1.hwaddr = " {{ mac.stdout }} >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="ubuntu"
+
+  - name: Add network details | network name
+    shell: echo "lxc.net.1.name = ens4" >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="ubuntu"
+
+  - name: Add network details | network link
+    shell: echo "lxc.net.1.link = br-mgmt" >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="ubuntu"
+
+  - name: Add network details | flags
+    shell: echo "lxc.net.1.flags = up" >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="ubuntu"
+
+  - name: Add network details | mtu
+    shell: echo "lxc.net.1.mtu = 1500" >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="ubuntu"
+
+  - name: Add network details | IP
+    shell: echo "lxc.net.1.ipv4.address = {{ dmapi_ip[groups.controller.index(inventory_hostname)] }}" >> /var/lib/lxc/{{ dmapi_container_name }}/config
+    when: distro=="ubuntu"
+
+  - name: Restart datamover api container
+    lxc_container:
+      name: "{{ dmapi_container_name }}"
+      state: restarted
+      template: "{{ distro }}"
+
+  - name: create tvault-contego directory
+    file:
+      path: /var/lib/lxc/{{ dmapi_container_name }}/rootfs/root/tvault-contego
+      state: directory
+
+  - name: copy tvault-contego-install.sh
+    copy:
+      src: "{{playbook_dir}}/tvault-contego-install.sh"
+      dest: /var/lib/lxc/{{ dmapi_container_name }}/rootfs/root/tvault-contego
+      mode: 0550
+
+  - name: copy tvault-contego-install.answers from playbook_dir to remote server
+    copy:
+      src: "{{ playbook_dir }}/tvault-contego-install.answers"
+      dest: /var/lib/lxc/{{ dmapi_container_name }}/rootfs/root/tvault-contego
+      owner: root
+      group: root
+      mode: 0644
+
+  - name: Remove compute=True entry in contego answers file
+    lineinfile: 
+      dest: /var/lib/lxc/{{ dmapi_container_name }}/rootfs/root/tvault-contego/tvault-contego-install.answers
+      state: absent 
+      line: "compute=True"
+
+  - name: Add controller=True entry in contego answers file
+    lineinfile:
+      dest: /var/lib/lxc/{{ dmapi_container_name }}/rootfs/root/tvault-contego/tvault-contego-install.answers
+      state: present
+      line: "controller=True"
+
+  - name: Update nova version in tvault-contego-install.sh
+    shell: |
+      sed -i '/NOVA_VERSION=/d' tvault-contego-install.sh
+      sed -i '/NOVA_VERSION_QUEEN=/a \    NOVA_VERSION='{{ os_release_version }}  tvault-contego-install.sh
+      sed -i '/NOVA_VERSION_QUEEN=/d' tvault-contego-install.sh
+    args:
+      chdir: /var/lib/lxc/{{ dmapi_container_name }}/rootfs/root/tvault-contego
+
+  - name: Install datamover api on container
+    lxc_container:
+      name: "{{ dmapi_container_name }}"
+      state: restarted
+      template: "{{ distro }}"
+      container_command: |
+        cd tvault-contego
+        ./tvault-contego-install.sh --install --file tvault-contego-install.answers | tee /tmp/tvault-contego-install
+        service tvault-datamover-api status | tee /tmp/tvault-datamover-api-status
+  - name: Update domain_name in dmapi.conf
+    shell: |
+      sed -i '/project_domain_name = /c project_domain_name = Default' dmapi.conf
+      sed -i '/user_domain_name = /c user_domain_name = Default' dmapi.conf
+    args:
+      chdir: /var/lib/lxc/{{ dmapi_container_name }}/rootfs/etc/dmapi
+
+  - name: Get status of datamover api service
+    shell: lxc-attach -n {{ dmapi_container_name }} -- bash -c "service tvault-datamover-api status"
+    register: status
+  - debug: var=status.stdout
+
+  - name: Add result to file
+    shell: echo "DatamoverAPI_Deployment_{{ inventory_hostname }} PASS" >> "{{ test_results_file }}"
+    when: '"active (running)" in status.stdout'
+    delegate_to: localhost
+
+  - name: Add result to file
+    shell: echo "DatamoverAPI_Deployment_{{ inventory_hostname }} FAIL" >> "{{ test_results_file }}"
+    when: '"active (running)" not in status.stdout'
+    delegate_to: localhost
+
+- hosts: compute
+
+  vars:
+    test_results_file: test_results_{{ setup_name }}
+
+  tasks:
+  - name: Find nova venv
+    find:
+      patterns: 'nova-*'
+      paths:
+        - /openstack/venvs
+      file_type: directory
+    register: file_found
+  - debug: var=file_found
+
+  - name: create tvault-contego directory
+    file:
+      path: /var/lib/lxc/{{ inventory_hostname }}/rootfs/root/tvault-contego
+      state: directory
+
+  - name: copy tvault-contego-install.sh
+    copy:
+      src: "{{playbook_dir}}/tvault-contego-install.sh"
+      dest: /var/lib/lxc/{{ inventory_hostname }}/rootfs/root/tvault-contego
+      mode: 0550
+
+  - name: copy tvault-contego-install.answers from playbook_dir to remote server
+    copy:
+      src: "{{ playbook_dir }}/tvault-contego-install.answers"
+      dest: /var/lib/lxc/{{ inventory_hostname }}/rootfs/root/tvault-contego
+      owner: root
+      group: root
+      mode: 0644
+
+  - name: Remove controller=True entry in contego answers file
+    lineinfile:
+      dest: /var/lib/lxc/{{ inventory_hostname }}/rootfs/root/tvault-contego/tvault-contego-install.answers
+      state: absent
+      line: "controller=True"
+
+  - name: Add compute=True entry in contego answers file
+    lineinfile:
+      dest: /var/lib/lxc/{{ inventory_hostname }}/rootfs/root/tvault-contego/tvault-contego-install.answers
+      state: present
+      line: "compute=True"
+
+  - name: Uninstall existing datamover on compute node
+    shell: source {{ file_found.files[0]['path'] }}/bin/activate && ./tvault-contego-install.sh --uninstall --file tvault-contego-install.answers | tee /tmp/tvault-contego-uninstall
+    args:
+      chdir: /var/lib/lxc/{{ inventory_hostname }}/rootfs/root/tvault-contego
+
+  - name: Install datamover on compute node
+    shell: source {{ file_found.files[0]['path'] }}/bin/activate && ./tvault-contego-install.sh --install --file tvault-contego-install.answers | tee /tmp/tvault-contego-install
+    args:
+      chdir: /var/lib/lxc/{{ inventory_hostname }}/rootfs/root/tvault-contego
+
+  - name: Start datamover service
+    shell: service tvault-contego start
+
+  - name: Get the status of tvault-contego service
+    service_facts:
+    register: services_state
+  - debug: var=services_state.ansible_facts.services['tvault-contego.service']['state']
+
+  - name: Sleep for 15sec
+    pause:
+      seconds: 15
+
+  - name: Get trilio mount point
+    shell: mount | grep triliovault-mounts
+    register: mt_point
+    ignore_errors: yes
+  - debug: var=mt_point
+
+  - name: Add result to file
+    shell: echo "Datamover_Deployment_{{ inventory_hostname }} PASS" >> "{{ test_results_file }}"
+    when:
+      - services_state.ansible_facts.services['tvault-contego.service']['state']=="running"
+      - mt_point.rc==0
+    delegate_to: localhost
+
+  - name: Add result to file
+    shell: echo "Datamover_Deployment_{{ inventory_hostname }} FAIL" >> "{{ test_results_file }}"
+    when: (services_state.ansible_facts.services['tvault-contego.service']['state'] != "running") or (mt_point.rc != 0)
+    delegate_to: localhost
+
+
+- hosts: controller
+
+  vars:
+    test_results_file: test_results_{{ setup_name }}
+
+  tasks:
+  - name: Fetch distribution
+    shell: awk '/ID=/' /etc/os-release | sed 's/ID=//' | sed -r 's/\"|\(|\)//g' | awk '{print $1;exit}'
+    register: result
+
+  - name: Get distro name
+    set_fact: distro={{ result.stdout }}
+    when: result.stdout=="centos"
+
+  - name: Get distro name
+    set_fact: distro=ubuntu
+    when: result.stdout!="centos"
+  - debug: var=distro
+
+  - name: Find horizon container
+    find:
+      patterns: '*_horizon_*'
+      paths:
+        - /var/lib/lxc
+      file_type: directory
+    register: file_found
+  - debug: var=file_found
+  - set_fact: horizon_container_name="{{ (file_found.files[0]['path']).split('/')[4] }}"
+  - debug: var=horizon_container_name
+
+  - name: install packages on horizon container | curl
+    shell: lxc-attach -n {{ horizon_container_name }} -- bash -c "apt-get install curl -y"
+    when: distro=="ubuntu"
+    retries: 3
+    delay: 3
+    register: result
+    until: result.rc == 0
+
+  - name: create tvault-horizon-plugin directory
+    file:
+      path: /var/lib/lxc/{{ horizon_container_name }}/rootfs/root/tvault-horizon-plugin
+      state: directory
+
+  - name: copy tvault-horizon-plugin-install.sh
+    copy:
+      src: "{{playbook_dir}}/tvault-horizon-plugin-install.sh"
+      dest: /var/lib/lxc/{{ horizon_container_name }}/rootfs/root/tvault-horizon-plugin
+      mode: 0550
+
+  - name: copy tvault-horizon-plugin-install.answer from playbook_dir to remote server
+    copy:
+      src: "{{ playbook_dir }}/tvault-horizon-plugin-install.answer"
+      dest: /var/lib/lxc/{{ horizon_container_name }}/rootfs/root/tvault-horizon-plugin
+      owner: root
+      group: root
+      mode: 0644
+
+  - name: Uninstall existing trilio horizon plugin
+    lxc_container:
+      name: "{{ horizon_container_name }}"
+      state: started
+      container_command: |
+        source /openstack/venvs/horizon*/bin/activate
+        cd tvault-horizon-plugin
+        ./tvault-horizon-plugin-install.sh --uninstall --auto | tee /tmp/tvault-horizon-uninstall
+        pip list | grep tvault | tee /tmp/pip_list_tvault
+        pip list | grep workload | tee /tmp/pip_list_wlmcli
+  - name: Install trilio horizon plugin
+    lxc_container:
+      name: "{{ horizon_container_name }}"
+      state: started
+      container_command: |
+        source /openstack/venvs/horizon*/bin/activate
+        cd tvault-horizon-plugin
+        ./tvault-horizon-plugin-install.sh --auto | tee /tmp/tvault-horizon-install
+        pip list | grep tvault | tee /tmp/pip_list_tvault_new
+        pip list | grep workload | tee /tmp/pip_list_wlmcli_new
+  - name: Fetch tvault horizon plugin version installed
+    shell: cat /var/lib/lxc/{{ horizon_container_name }}/rootfs/tmp/pip_list_tvault_new
+    register: var1
+  - debug: var=var1.stdout
+  - set_fact: var2={{ (var1.stdout) | replace('(', "") | replace(')', "") }}
+  - shell: echo "{{ var2 }}" | tr -s " "
+    register: var3
+  - debug: var=(var3.stdout).split(' ')
+  - set_fact: tvault_horizon_version="{{ (var3.stdout).split(' ')[1] }}"
+  - debug: var=tvault_horizon_version
+
+  - name: Fetch workloadmanager cli version installed
+    shell: cat /var/lib/lxc/{{ horizon_container_name }}/rootfs/tmp/pip_list_wlmcli_new
+    register: var4
+  - set_fact: var5={{ (var4.stdout) | replace('(', "") | replace(')', "") }}
+  - shell: echo "{{ var5 }}" | tr -s " "
+    register: var6
+  - debug: var=(var6.stdout).split(' ')
+  - set_fact: wlmcli_version="{{ (var6.stdout).split(' ')[1] }}"
+  - debug: var=wlmcli_version
+
+  - name: Add result to file
+    shell: echo "Horizon_Plugin_Installation_{{ inventory_hostname }} PASS" >> {{ test_results_file }}
+    when: (tvault_horizon_version == tvault_version) and (wlmcli_version == tvault_version)
+    delegate_to: localhost
+
+  - name: Add result to file
+    shell: echo "Horizon_Plugin_Installation_{{ inventory_hostname }} FAIL" >> {{ test_results_file }}
+    when: (tvault_horizon_version != tvault_version) or (wlmcli_version != tvault_version)
+    delegate_to: localhost

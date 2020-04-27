@@ -1,10 +1,10 @@
 ##Please configure following parameters required for Tvault horizon plugin installation
 
 ### Specify Tvault appliance controller IP address
-TVAULTAPP=192.168.6.15
+TVAULTAPP=192.168.11.165
 
 ###Specify openstack dashboard folder path
-HORIZON_PATH=/openstack/venvs/horizon-19.0.2/lib/python2.7/site-packages/
+HORIZON_PATH=/openstack/venvs/horizon-20.0.2.dev6/lib/python2.7/site-packages/
 
 ##Specify webserver service name that Openstack Horizon is hosted on
 WebServer=httpd
